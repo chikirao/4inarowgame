@@ -130,11 +130,11 @@ export function getPlayerDisc(room, uid) {
 
 export function getPlayerLabel(disc) {
   if (disc === RED) {
-    return 'Гранатовый';
+    return 'Красный';
   }
 
   if (disc === YELLOW) {
-    return 'Золотой';
+    return 'Зеленый';
   }
 
   return 'Зритель';
