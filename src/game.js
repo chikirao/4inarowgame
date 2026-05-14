@@ -112,6 +112,30 @@ export function isDraw(boardString) {
   return parseBoard(boardString).every((cell) => cell !== EMPTY) && !detectWinner(boardString);
 }
 
+export function getLegalColumns(boardString) {
+  const cells = parseBoard(boardString);
+
+  return Array.from({ length: COLS }, (_, col) => col).filter((col) => cells[indexOfCell(0, col)] === EMPTY);
+}
+
+export function simulateMove(boardString, col, disc) {
+  const move = dropDisc(boardString, col, disc);
+
+  if (!move) {
+    return null;
+  }
+
+  const victory = detectWinner(move.board);
+  const draw = isDraw(move.board);
+
+  return {
+    ...move,
+    status: victory || draw ? 'finished' : 'playing',
+    winner: victory?.winner || (draw ? 'draw' : ''),
+    winningLine: victory?.line || []
+  };
+}
+
 export function getPlayerDisc(room, uid) {
   if (!room || !uid) {
     return null;
@@ -146,6 +170,189 @@ export function getOpponentDisc(disc) {
 
 export function isRoomFull(room) {
   return Boolean(room?.players?.red?.uid && room?.players?.yellow?.uid);
+}
+
+const CENTER_FIRST_COLUMNS = [3, 2, 4, 1, 5, 0, 6];
+
+function findTacticalMove(boardString, disc) {
+  return CENTER_FIRST_COLUMNS.find((col) => simulateMove(boardString, col, disc)?.winner === disc);
+}
+
+function scoreWindow(window, botDisc, humanDisc) {
+  const botCount = window.filter((cell) => cell === botDisc).length;
+  const humanCount = window.filter((cell) => cell === humanDisc).length;
+  const emptyCount = window.filter((cell) => cell === EMPTY).length;
+
+  if (botCount === 4) {
+    return 100000;
+  }
+
+  if (humanCount === 4) {
+    return -100000;
+  }
+
+  if (botCount === 3 && emptyCount === 1) {
+    return 120;
+  }
+
+  if (botCount === 2 && emptyCount === 2) {
+    return 18;
+  }
+
+  if (humanCount === 3 && emptyCount === 1) {
+    return -150;
+  }
+
+  if (humanCount === 2 && emptyCount === 2) {
+    return -20;
+  }
+
+  return 0;
+}
+
+function scoreBoard(boardString, botDisc, humanDisc) {
+  const cells = parseBoard(boardString);
+  let score = 0;
+
+  for (let row = 0; row < ROWS; row += 1) {
+    if (cells[indexOfCell(row, 3)] === botDisc) {
+      score += 7;
+    }
+  }
+
+  for (let row = 0; row < ROWS; row += 1) {
+    for (let col = 0; col <= COLS - 4; col += 1) {
+      score += scoreWindow(
+        [0, 1, 2, 3].map((step) => cells[indexOfCell(row, col + step)]),
+        botDisc,
+        humanDisc
+      );
+    }
+  }
+
+  for (let col = 0; col < COLS; col += 1) {
+    for (let row = 0; row <= ROWS - 4; row += 1) {
+      score += scoreWindow(
+        [0, 1, 2, 3].map((step) => cells[indexOfCell(row + step, col)]),
+        botDisc,
+        humanDisc
+      );
+    }
+  }
+
+  for (let row = 0; row <= ROWS - 4; row += 1) {
+    for (let col = 0; col <= COLS - 4; col += 1) {
+      score += scoreWindow(
+        [0, 1, 2, 3].map((step) => cells[indexOfCell(row + step, col + step)]),
+        botDisc,
+        humanDisc
+      );
+    }
+  }
+
+  for (let row = 0; row <= ROWS - 4; row += 1) {
+    for (let col = 3; col < COLS; col += 1) {
+      score += scoreWindow(
+        [0, 1, 2, 3].map((step) => cells[indexOfCell(row + step, col - step)]),
+        botDisc,
+        humanDisc
+      );
+    }
+  }
+
+  return score;
+}
+
+function minimax(boardString, depth, alpha, beta, maximizing, botDisc, humanDisc) {
+  const victory = detectWinner(boardString);
+  const legalColumns = getLegalColumns(boardString);
+
+  if (victory?.winner === botDisc) {
+    return { score: 1000000 + depth, col: null };
+  }
+
+  if (victory?.winner === humanDisc) {
+    return { score: -1000000 - depth, col: null };
+  }
+
+  if (depth === 0 || legalColumns.length === 0) {
+    return { score: scoreBoard(boardString, botDisc, humanDisc), col: null };
+  }
+
+  const orderedColumns = CENTER_FIRST_COLUMNS.filter((col) => legalColumns.includes(col));
+  let bestCol = orderedColumns[0] ?? null;
+
+  if (maximizing) {
+    let value = -Infinity;
+
+    for (const col of orderedColumns) {
+      const move = simulateMove(boardString, col, botDisc);
+      const next = minimax(move.board, depth - 1, alpha, beta, false, botDisc, humanDisc);
+
+      if (next.score > value) {
+        value = next.score;
+        bestCol = col;
+      }
+
+      alpha = Math.max(alpha, value);
+
+      if (alpha >= beta) {
+        break;
+      }
+    }
+
+    return { score: value, col: bestCol };
+  }
+
+  let value = Infinity;
+
+  for (const col of orderedColumns) {
+    const move = simulateMove(boardString, col, humanDisc);
+    const next = minimax(move.board, depth - 1, alpha, beta, true, botDisc, humanDisc);
+
+    if (next.score < value) {
+      value = next.score;
+      bestCol = col;
+    }
+
+    beta = Math.min(beta, value);
+
+    if (alpha >= beta) {
+      break;
+    }
+  }
+
+  return { score: value, col: bestCol };
+}
+
+export function chooseBotColumn(boardString, difficulty = 'normal', botDisc = YELLOW, humanDisc = RED) {
+  const legalColumns = getLegalColumns(boardString);
+
+  if (!legalColumns.length) {
+    return null;
+  }
+
+  if (difficulty === 'easy') {
+    return legalColumns[Math.floor(Math.random() * legalColumns.length)];
+  }
+
+  const winningMove = findTacticalMove(boardString, botDisc);
+
+  if (typeof winningMove === 'number') {
+    return winningMove;
+  }
+
+  const blockingMove = findTacticalMove(boardString, humanDisc);
+
+  if (typeof blockingMove === 'number') {
+    return blockingMove;
+  }
+
+  if (difficulty === 'hard') {
+    return minimax(boardString, 5, -Infinity, Infinity, true, botDisc, humanDisc).col ?? legalColumns[0];
+  }
+
+  return CENTER_FIRST_COLUMNS.find((col) => legalColumns.includes(col)) ?? legalColumns[0];
 }
 
 export function applyMoveToRoom(room, uid, col) {
